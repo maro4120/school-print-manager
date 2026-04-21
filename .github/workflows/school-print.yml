@@ -1,0 +1,190 @@
+name: 学校プリント自動処理
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_url:
+        description: 'プリント画像のURL'
+        required: true
+        type: string
+      memo:
+        description: '補足メモ（任意）'
+        required: false
+        type: string
+  repository_dispatch:
+    types: [school-print]
+
+jobs:
+  process-print:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: 依存パッケージのインストール
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y fonts-ipafont imagemagick
+          pip install reportlab google-auth google-api-python-client --break-system-packages
+
+      - name: 画像を取得してリサイズ
+        run: |
+          IMAGE_URL="${{ github.event.inputs.image_url || github.event.client_payload.image_url }}"
+          curl -fsSL "$IMAGE_URL" -o original_image.jpg
+          # 長辺1600px以下に縮小・品質85（Claude Visionの精度と速度のバランス）
+          convert original_image.jpg -resize 1600x1600\> -quality 85 print_image.jpg
+          ls -lh print_image.jpg
+
+      - name: Claude Code で処理実行
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: 16000
+          MEMO: "${{ github.event.inputs.memo || github.event.client_payload.memo || '' }}"
+        with:
+          claude_args: "--max-turns 30"
+          acknowledge-dangerously-skip-permissions-responsibility: "true"
+          prompt: |
+            カレントディレクトリにある `print_image.jpg` を読み取り、以下の4ステップを順番に実行してください。
+            補足メモ: ${{ github.event.inputs.memo || github.event.client_payload.memo || 'なし' }}
+
+            ━━━━━━━━━━━━━━━━━━━━━━━
+            STEP 1: 画像解析 → print_data.json を作成
+            ━━━━━━━━━━━━━━━━━━━━━━━
+
+            `print_image.jpg` を注意深く読み取り、以下のJSONを `print_data.json` として保存してください。
+
+            ルール:
+            - 画像に書かれている文字を**一字一句そのまま**転写する（推測・補完・言い換え禁止）
+            - 読み取れない文字は "（不明）" と記載する
+            - 日付は令和を西暦に変換（令和8年 = 2026年）
+            - 月日のみ記載の場合は当年（2026年）として扱う
+
+            ```json
+            {
+              "title": "プリントのタイトル",
+              "distributed_date": "YYYY-MM-DD",
+              "sender": "差出人・発行元",
+              "grade": "対象学年（例: 1年生、全学年）",
+              "summary": ["要点1（30字以内）", "要点2（30字以内）", "要点3（30字以内）"],
+              "sections": {
+                "セクション名": "内容をそのまま転写"
+              },
+              "deadlines": [
+                {"label": "内容", "date": "YYYY-MM-DD", "type": "締め切り"}
+              ],
+              "has_reply_slip": false
+            }
+            ```
+
+            sections のキーはプリントの見出しをそのまま使う。存在しないセクションは含めない。
+            deadlines の type は「締め切り」「提出」「行事」のいずれか。
+
+            ━━━━━━━━━━━━━━━━━━━━━━━
+            STEP 2: PDF生成
+            ━━━━━━━━━━━━━━━━━━━━━━━
+
+            `print_data.json` を読み込み、`generate_pdf.py` を作成して実行してください。
+
+            フォントパス: `/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf`
+            ページサイズ: A4
+            ファイル名形式: `YYYYMMDD_[title]_清水小学校.pdf`
+
+            PDF構成（上から順に）:
+            1. ヘッダー（RGBで #1a56db の青背景、白文字）
+               - 大: タイトル
+               - 小: 差出人 ／ 配布日 ／ 対象学年
+            2. サマリーボックス（薄青 #e8f0fe 背景、枠付き）
+               - 「📌 ポイント」見出し
+               - 要点を箇条書き3行
+            3. 本文
+               - sections の各キーを見出し（太字、下線）として表示
+               - 内容をその下に表示
+            4. 締め切り・提出物ボックス（赤枠 #cc0000、薄赤 #fff0f0 背景）
+               - deadlines が空の場合はこのブロックを省略
+            5. 返信欄（has_reply_slip が true の場合のみ）
+               - 点線の切り取り線
+               - 「✂ 返信欄あり（期限までに提出してください）」
+
+            Pythonコード冒頭:
+            ```python
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.units import mm
+            from reportlab.lib import colors
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            import json, datetime
+
+            pdfmetrics.registerFont(TTFont('IPAGothic', '/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf'))
+            pdfmetrics.registerFont(TTFont('IPAGothicBold', '/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf'))
+
+            with open('print_data.json', encoding='utf-8') as f:
+                data = json.load(f)
+            ```
+
+            生成後: ファイル名を標準出力に出力し、`PDF_FILENAME` という名前のファイルに書き込む。
+
+            ━━━━━━━━━━━━━━━━━━━━━━━
+            STEP 3: Google Drive アップロード
+            ━━━━━━━━━━━━━━━━━━━━━━━
+
+            環境変数 `GOOGLE_SERVICE_ACCOUNT_JSON` を使いアップロードしてください。
+
+            フォルダ構成:
+            ```
+            学校プリント_清水小学校/
+              2026年度/
+                [PDFファイル名]
+            ```
+
+            フォルダが存在しない場合は自動作成する。
+            アップロード後: `webViewLink` を標準出力に出力する。
+
+            認証コード:
+            ```python
+            import json, os
+            from googleapiclient.discovery import build
+            from googleapiclient.http import MediaFileUpload
+            from google.oauth2 import service_account
+
+            creds = service_account.Credentials.from_service_account_info(
+                json.loads(os.environ['GOOGLE_SERVICE_ACCOUNT_JSON']),
+                scopes=['https://www.googleapis.com/auth/drive']
+            )
+            service = build('drive', 'v3', credentials=creds)
+            ```
+
+            ━━━━━━━━━━━━━━━━━━━━━━━
+            STEP 4: Google カレンダー転記
+            ━━━━━━━━━━━━━━━━━━━━━━━
+
+            `print_data.json` の `deadlines` を読み込み、Google カレンダー（primary）にイベントを作成してください。
+
+            - type が「締め切り」→ イベント名「📋 [label] 締め切り」
+            - type が「提出」→ イベント名「📎 提出: [label]」
+            - type が「行事」→ イベント名「🏫 [label]」
+            - has_reply_slip が true → 締め切り3日前にリマインダー追加
+            - 同タイトル・同日付のイベントが既存なら作成しない（重複チェック必須）
+            - deadlines が空の場合はこのステップをスキップ
+
+            ━━━━━━━━━━━━━━━━━━━━━━━
+            STEP 5: 完了サマリー出力
+            ━━━━━━━━━━━━━━━━━━━━━━━
+
+            すべての処理が完了したら以下の形式で出力してください:
+
+            ```
+            ✅ 処理完了
+            ━━━━━━━━━━━━━━━━━━━━━━━
+            📄 PDF: [ファイル名]
+            📁 Drive: [webViewLink]
+            📅 カレンダー登録: [N]件
+            ━━━━━━━━━━━━━━━━━━━━━━━
+            ```
+
+            エラーが発生した場合は処理を中断せず、該当ステップのエラー内容を記録して次のステップに進んでください。
