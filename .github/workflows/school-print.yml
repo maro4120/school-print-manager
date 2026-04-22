@@ -44,7 +44,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           CLAUDE_CODE_MAX_OUTPUT_TOKENS: 16000
-          MEMO: "${{ github.event.inputs.memo || github.event.client_payload.memo || '' }}"
+          MEMO: "${{ github.event.inputs.memo || github.event.client_payload.memo || 'なし' }}"
         with:
           claude_args: "--max-turns 30"
           acknowledge-dangerously-skip-permissions-responsibility: "true"
