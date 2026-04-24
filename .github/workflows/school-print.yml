@@ -47,7 +47,7 @@ jobs:
           MEMO: "${{ github.event.inputs.memo || github.event.client_payload.memo || 'なし' }}"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: "--max-turns 30"
+          claude_args: "--max-turns 15"
           prompt: |
             カレントディレクトリにある `print_image.jpg` を読み取り、以下の4ステップを順番に実行してください。
             補足メモ: ${{ github.event.inputs.memo || github.event.client_payload.memo || 'なし' }}
