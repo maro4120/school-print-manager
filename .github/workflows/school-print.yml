@@ -7,6 +7,10 @@ on:
         description: 'プリント画像のURL'
         required: true
         type: string
+      image_url_2:
+        description: 'プリント裏面画像のURL（任意）'
+        required: false
+        type: string
       memo:
         description: '補足メモ（任意）'
         required: false
@@ -35,6 +39,11 @@ jobs:
         run: |
           IMAGE_URL="${{ github.event.inputs.image_url || github.event.client_payload.image_url }}"
           curl -fsSL "$IMAGE_URL" -o original_image.jpg
+          IMAGE_URL_2="${{ github.event.inputs.image_url_2 }}"
+          if [ -n "$IMAGE_URL_2" ]; then
+            curl -fsSL "$IMAGE_URL_2" -o original_image_2.jpg
+            convert original_image_2.jpg -resize 1600x1600\> -quality 85 print_image_2.jpg
+          fi
           # 長辺1600px以下に縮小・品質85（Claude Visionの精度と速度のバランス）
           convert original_image.jpg -resize 1600x1600\> -quality 85 print_image.jpg
           ls -lh print_image.jpg
