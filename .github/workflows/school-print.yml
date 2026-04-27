@@ -39,14 +39,22 @@ jobs:
         run: |
           IMAGE_URL="${{ github.event.inputs.image_url || github.event.client_payload.image_url }}"
           curl -fsSL "$IMAGE_URL" -o original_image.jpg
-          IMAGE_URL_2="${{ github.event.inputs.image_url_2 }}"
-          if [ -n "$IMAGE_URL_2" ]; then
-            curl -fsSL "$IMAGE_URL_2" -o original_image_2.jpg
-            convert original_image_2.jpg -resize 1600x1600\> -quality 85 print_image_2.jpg
-          fi
-          # 長辺1600px以下に縮小・品質85（Claude Visionの精度と速度のバランス）
           convert original_image.jpg -resize 1600x1600\> -quality 85 print_image.jpg
           ls -lh print_image.jpg
+          
+          IMAGE_URL_2="${{ github.event.inputs.image_url_2 || github.event.client_payload.image_url_2 }}"
+          if [ -n "$IMAGE_URL_2" ]; then
+            if curl -fsSL "$IMAGE_URL_2" -o original_image_2.jpg 2>/dev/null; then
+              if convert original_image_2.jpg -resize 1600x1600\> -quality 85 print_image_2.jpg 2>/dev/null; then
+                echo "2枚目処理完了"
+              else
+                echo "2枚目変換失敗 - スキップ"
+                rm -f original_image_2.jpg
+              fi
+            else
+              echo "2枚目ダウンロード失敗 - スキップ"
+            fi
+          fi
 
       - name: Claude Code で処理実行
         uses: anthropics/claude-code-action@v1
