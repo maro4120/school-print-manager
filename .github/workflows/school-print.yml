@@ -41,18 +41,16 @@ jobs:
           curl -fsSL "$IMAGE_URL" -o original_image.jpg
           convert original_image.jpg -resize 1600x1600\> -quality 85 print_image.jpg
           ls -lh print_image.jpg
-          
-          IMAGE_URL_2="${{ github.event.inputs.image_url_2 || github.event.client_payload.image_url_2 }}"
+
+          IMAGE_URL_2="${{ github.event.inputs.image_url_2 }}"
           if [ -n "$IMAGE_URL_2" ]; then
-            if curl -fsSL "$IMAGE_URL_2" -o original_image_2.jpg 2>/dev/null; then
-              if convert original_image_2.jpg -resize 1600x1600\> -quality 85 print_image_2.jpg 2>/dev/null; then
-                echo "2枚目処理完了"
-              else
-                echo "2枚目変換失敗 - スキップ"
-                rm -f original_image_2.jpg
-              fi
+            if curl -fsSL "$IMAGE_URL_2" -o original_image_2.jpg && \
+               convert original_image_2.jpg -resize 1600x1600\> -quality 85 print_image_2.jpg; then
+              echo "✅ 2枚目処理完了"
+              ls -lh print_image_2.jpg
             else
-              echo "2枚目ダウンロード失敗 - スキップ"
+              echo "⚠️ 2枚目の画像処理に失敗 - 1枚目のみで続行"
+              rm -f original_image_2.jpg print_image_2.jpg
             fi
           fi
 
